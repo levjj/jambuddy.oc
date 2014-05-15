@@ -1,0 +1,9 @@
+Name: jambuddy
+Description: Music bot that automatically adjusts to the player
+Version: 2014-05-14
+Origin: git://github.com/levjj/jambuddy.git
+SourcePath: src
+Includes: jack/jack.h jack/midiport.h
+Libs: -ljack
+Main: jambuddy
+Pkgs: jack
