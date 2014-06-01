@@ -1,5 +1,13 @@
 import os/Time
+import io/File
+import io/FileReader
+import text/json
+import structs/Bag
+import structs/HashBag
+import structs/ArrayList
+
 import player
+
 include stdio, jack/jack, jack/midiport
 
 jack_options_t: extern cover
@@ -47,8 +55,10 @@ process: func (frames: jack_nframes_t, arg:Pointer) -> Int {
         if (0 == jack_midi_event_get(evt&, buffer, i)) {
             type:Char = (evt buffer)[0] & 0xf0
             if (type != 0x90) continue
-            time:UInt = evt time as UInt + tframes as UInt
-            player.noteOn(time, (evt buffer)[1] as UInt, (evt buffer)[2] as UInt)
+            time:UInt = evt time as UInt + tframes
+            e:Event
+            e init(time, (evt buffer)[1] as UInt, (evt buffer)[2] as UInt)
+            player.noteOn(e, tframes)
         }
     }
     tframes += frames as UInt
@@ -56,9 +66,30 @@ process: func (frames: jack_nframes_t, arg:Pointer) -> Int {
     return 0;
 }
 
-main: func {
-    "Initliazing Jack" println()
+parse: func (content: HashBag) -> ArrayList<Event> {
+    result := ArrayList<Event> new()
+    notes:Bag = content get("notes", Bag)
+    for (i in 0..notes size) {
+        noteObj:HashBag = notes get(i, HashBag)
+        e:Event
+        e fromObject(noteObj)
+        result add(e)
+    }
+    return result
+}
 
+testWithNotes: func (notes: ArrayList<Event>) {
+
+}
+
+main: func (nargs: Int, args: CString*) {
+    if (nargs > 1) {
+        file:FileReader = FileReader new(args[1] toString())
+        data:ArrayList<Event> = parse(JSON parse(file))
+        file close()
+        testWithNotes(data)
+        exit (EXIT_SUCCESS)
+    }
     client:Pointer = jack_client_open("jambuddy", JackNullOption, null)
     if (client == null) {
         "Could not create JACK client." println()
