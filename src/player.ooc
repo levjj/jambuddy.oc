@@ -1,6 +1,7 @@
 import math
 import text/StringTokenizer
 import structs/HashBag
+import structs/ArrayList
 
 include jack/jack, jack/midiport
 
@@ -22,9 +23,25 @@ Event: cover {
     }
 }
 
-powers := [1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 32.0, 48.0, 64.0]
-eta:Double = 0.05
-norm:Double = 60 * 4 * 48000 // seconds per minute * beats per bar * sample rate
+POWERS:Double[12] = [1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 32.0, 48.0, 64.0]
+ETA:Double = 0.05
+NORM:Double = 60 * 4 * 48000 // seconds per minute * beats per bar * sample rate
+
+DISS_I:Double[12] = [0.0,1.0,0.75333247,0.59523746,0.65496354,0.42311628,0.6846481,
+                     0.42311628,0.65496354,0.59523746,0.75333247,1.0]
+ETA2:Double = 1.2
+ALPHA:Double = 0.1
+
+
+umin: func (a,b: UInt) -> UInt {
+    if (a < b) return a;
+    return b;
+}
+
+umax: func (a,b: UInt) -> UInt {
+    if (a > b) return a;
+    return b;
+}
 
 min: func (a,b: Double) -> Double {
     if (a < b) return a;
@@ -68,7 +85,11 @@ Player: class {
     dynamic: Double
     lastNote: UInt
     subphase: UInt
+    v_w: ArrayList<Double>
+    v_s: ArrayList<Double>
+    loss: Double
     drums:Instrument*
+
 
     init: func() {
         first = true
@@ -77,6 +98,13 @@ Player: class {
         dynamic = 0.0
         lastNote = 0
         subphase = 0
+        loss = 0
+        v_w = ArrayList<Double> new()
+        v_s = ArrayList<Double> new()
+        for (i in 0..12) {
+            v_w.add(1.0 / 12.0)
+            v_s.add(1.0 / 12.0)
+        }
         drums = Drums new()
     }
 
@@ -87,8 +115,8 @@ Player: class {
         index:UInt = -1
         for (i in 0..12) {
             // printf("Power %d is %.4f\n", i, powers[i])
-            pred := spn / powers[i]
-            loss := (pred - delta as Double) * powers[i]
+            pred := spn / POWERS[i]
+            loss := (pred - delta as Double) * POWERS[i]
             // printf("1/%.4f predicts %.4f frames and gets loss %.4f\n", powers[i], pred, loss)
             if (first || abs(loss) < abs(minLoss)) {
                 minLoss = loss
@@ -100,7 +128,7 @@ Player: class {
         // printf ("tempo = %.4f", 1.0/ (spn / 48000) * 4 * 60)
         // phase = phase * (spn - eta * minLoss) / spn
         // spn = max(8400,min(96000, spn - eta * minLoss))
-        spn = spn - eta * minLoss
+        spn = spn - ETA * minLoss
         if (spn < 24400) spn *= 2
         if (spn > 60400) spn /= 2
         spn = (spn / 480) round() * 480
@@ -109,7 +137,7 @@ Player: class {
         dynamic = max(0.0, min(1.0, 0.125 + 0.75*(dynamic + 0.05 * ((index as Double) - 3))))
     }
 
-    updatePhase: func (delta: UInt) {
+    updatePhase: func(delta: UInt) {
         diff:Double = abs(-phase + delta) as Double
         if (diff > spn / 2) diff -= spn / 2
         alpha:Double = (-(diff/1000)*(diff/1000)) exp()
@@ -118,9 +146,32 @@ Player: class {
         // "->phase = #{phase}" println()
     }
 
-    updateDynamic: func (velocity: UInt) {
+    updateDynamic: func(velocity: UInt) {
         dynamic = max(0.0, min(1.0, 0.125 + 0.75*(dynamic + 0.0025 * ((velocity as Double) - 64.0))))
         // "dynamics = #{dynamic}" println()
+    }
+
+    diss: func(pred:UInt, data:UInt) -> Double {
+        interval:UInt = umax(pred,data) - umin(pred,data)
+        interval = interval % 12
+        return DISS_I[interval]
+    }
+
+    updateHarmony: func(pitch: UInt) {
+        ltm,v:Double[12]
+        for (i in 0..12) {
+            ltm[i] = diss(i,pitch)
+            loss += v_w[i] * ltm[i]
+        }
+        sum:Double = 0.0
+        for (i in 0..12) {
+            v[i] = v_w[i] * ((-1.0 * ETA2 * ltm[i]) exp())
+            sum += v[i]
+        }
+        for (i in 0..12) {
+            v_w[i] = ((1.0 - ALPHA) * (v[i] / sum)) + (ALPHA * v_s[i])
+            v_s[i] = ((1.0 - ALPHA) * v_s[i]) + (ALPHA * (v[i] / sum))
+        }
     }
 
     noteOn: func(evt: Event, tframes: UInt) {
@@ -134,8 +185,21 @@ Player: class {
             updateDynamic(evt velocity)
             last = evt frame
         }
-        printf("%.4f,%.4f\n", 1.0/ (spn / 48000) * 4 * 60, dynamic)
-        fflush(stdout);
+        updateHarmony(evt note)
+        log(evt)
+    }
+
+    log: func(evt: Event) {
+        printf("%d,%.4f,%.4f,%.4f,",
+               evt frame,
+               1.0/ (spn / 48000) * 4 * 60,
+               dynamic,
+               loss)
+        printf("%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,",
+               v_w[0],v_w[1],v_w[2],v_w[3],v_w[4],v_w[5],v_w[6],v_w[7],v_w[8],v_w[9],v_w[10],v_w[11])
+        printf("%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n",
+               v_s[0],v_s[1],v_s[2],v_s[3],v_s[4],v_s[5],v_s[6],v_s[7],v_s[8],v_s[9],v_s[10],v_s[11])
+        fflush(stdout)
     }
 
     play: func(buffer:Pointer, frames: UInt, instrument: Instrument*) {

@@ -115,6 +115,7 @@ main: func (nargs: Int, args: CString*) {
     }
 
     player = Player new()
+    printf("Frame,Tempo,Dynamic,Loss,C,C#,D,D#,E,F,F#,G,G#,A,A#,B,Cs,C#s,Ds,D#s,Es,Fs,F#s,Gs,G#s,As,A#s,Bs\n")
 
     r:Int = jack_activate (client)
     if (r != 0) {
