@@ -32,6 +32,7 @@ jack_port_register: extern func (client: Pointer,
 
 jack_activate: extern func (client: Pointer) -> Int
 jack_port_get_buffer: extern func (port: Pointer, frames: jack_nframes_t) -> Pointer
+jack_midi_clear_buffer: extern func (buffer: Pointer)
 jack_midi_get_event_count: extern func (buffer: Pointer) -> Int
 
 JackEvent: cover from jack_midi_event_t {
@@ -42,14 +43,15 @@ JackEvent: cover from jack_midi_event_t {
 jack_midi_event_get: extern func (evt: JackEvent*, buffer: Pointer, i: Int) -> Int
 
 port:Pointer = null
+out:Pointer = null
 tframes:UInt = 0
 
 player:Player
 
 process: func (frames: jack_nframes_t, arg:Pointer) -> Int {
+    // process input
     buffer:Pointer = jack_port_get_buffer(port, frames)
     n:Int = jack_midi_get_event_count (buffer)
-
     for (i in 0..n) {
         evt:JackEvent
         if (0 == jack_midi_event_get(evt&, buffer, i)) {
@@ -61,8 +63,14 @@ process: func (frames: jack_nframes_t, arg:Pointer) -> Int {
             player.noteOn(e, tframes)
         }
     }
-    tframes += frames as UInt
 
+    // generate output
+    buffer = jack_port_get_buffer(out, frames)
+	jack_midi_clear_buffer(buffer)
+    player.playDrums(buffer, frames as UInt)
+
+    // post processing
+    tframes += frames as UInt
     return 0;
 }
 
@@ -99,6 +107,7 @@ main: func (nargs: Int, args: CString*) {
     jack_set_process_callback (client, process, 0)
 
     port = jack_port_register (client, "input", "8 bit raw midi", 1, 0)
+    out = jack_port_register (client, "output", "8 bit raw midi", 2, 0)
 
     if (port == null) {
         "Could not register port." println()
