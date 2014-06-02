@@ -43,7 +43,8 @@ JackEvent: cover from jack_midi_event_t {
 jack_midi_event_get: extern func (evt: JackEvent*, buffer: Pointer, i: Int) -> Int
 
 port:Pointer = null
-out:Pointer = null
+out_drums:Pointer = null
+out_bass:Pointer = null
 tframes:UInt = 0
 
 player:Player
@@ -65,9 +66,11 @@ process: func (frames: jack_nframes_t, arg:Pointer) -> Int {
     }
 
     // generate output
-    buffer = jack_port_get_buffer(out, frames)
-	jack_midi_clear_buffer(buffer)
-    player.playDrums(buffer, frames as UInt)
+    drumsBuffer:Pointer = jack_port_get_buffer(out_drums, frames)
+    bassBuffer:Pointer = jack_port_get_buffer(out_bass, frames)
+	jack_midi_clear_buffer(drumsBuffer)
+	jack_midi_clear_buffer(bassBuffer)
+    player.play(drumsBuffer, bassBuffer, frames as UInt)
 
     // post processing
     tframes += frames as UInt
@@ -107,7 +110,8 @@ main: func (nargs: Int, args: CString*) {
     jack_set_process_callback (client, process, 0)
 
     port = jack_port_register (client, "input", "8 bit raw midi", 1, 0)
-    out = jack_port_register (client, "output", "8 bit raw midi", 2, 0)
+    out_drums = jack_port_register (client, "drums", "8 bit raw midi", 2, 0)
+    out_bass = jack_port_register (client, "bass", "8 bit raw midi", 2, 0)
 
     if (port == null) {
         "Could not register port." println()
@@ -115,7 +119,7 @@ main: func (nargs: Int, args: CString*) {
     }
 
     player = Player new()
-    printf("Frame,Tempo,Dynamic,Loss,C,C#,D,D#,E,F,F#,G,G#,A,A#,B,Cs,C#s,Ds,D#s,Es,Fs,F#s,Gs,G#s,As,A#s,Bs\n")
+    "Frame,Tempo,Dynamic,Loss,C,C#,D,D#,E,F,F#,G,G#,A,A#,B,Cs,C#s,Ds,D#s,Es,Fs,F#s,Gs,G#s,As,A#s,Bs" println()
 
     r:Int = jack_activate (client)
     if (r != 0) {
@@ -124,9 +128,10 @@ main: func (nargs: Int, args: CString*) {
     }
     while (true) {
         match (fgetc(stdin)) {
-            case 10 => exit (0)
-            case 13 => exit (0)
-            case => Time sleepSec(1)
+            case 'x' => exit (0)
+            case 'a' => player toggleAnti()
+            case 's' => player toggleLoop()
+            case => r += 1
         }
     }
 }

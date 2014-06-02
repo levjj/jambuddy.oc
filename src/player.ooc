@@ -1,4 +1,5 @@
 import math
+import math/Random
 import text/StringTokenizer
 import structs/HashBag
 import structs/ArrayList
@@ -24,13 +25,13 @@ Event: cover {
 }
 
 POWERS:Double[12] = [1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 32.0, 48.0, 64.0]
-ETA:Double = 0.05
+ETA:Double = 0.1
 NORM:Double = 60 * 4 * 48000 // seconds per minute * beats per bar * sample rate
 
 DISS_I:Double[12] = [0.0,1.0,0.75333247,0.59523746,0.65496354,0.42311628,0.6846481,
                      0.42311628,0.65496354,0.59523746,0.75333247,1.0]
 ETA2:Double = 1.2
-ALPHA:Double = 0.1
+ALPHA:Double = 0.03
 
 
 umin: func (a,b: UInt) -> UInt {
@@ -54,15 +55,23 @@ max: func (a,b: Double) -> Double {
 }
 
 Instrument: class {
-    init: func {}
+    last: UInt
+    init: func {
+        last = 0
+    }
     play: func(subphase:UInt) -> Event {
-        return Event new(0, 0, 0)
+        evt:Event = this nextNote(subphase)
+        last = evt note
+        return evt
+    }
+    nextNote: func(subphase:UInt) -> Event {
+        return Event new(0,0,0)
     }
 }
 
 Drums: class extends Instrument {
     init: super func
-    play: func(subphase:UInt) -> Event {
+    nextNote: func(subphase:UInt) -> Event {
         return match (subphase) {
             case 0 => Event new(0,36,100)
             case 1 => Event new(0,42,50)
@@ -76,19 +85,55 @@ Drums: class extends Instrument {
     }
 }
 
+Bass: class extends Instrument {
+    probs: ArrayList<Double>
+    anti: Bool
+    init: func(=probs) {
+        super()
+        anti = false
+    }
+    velocity: func(subphase:UInt) -> UInt {
+        return match (subphase) {
+            case 0 => 90
+            case 1 => 60
+            case 2 => 40
+            case 3 => 70
+            case 4 => Random randInt(0,90)
+            case 5 => 60
+            case 6 => Random randInt(0,60)
+            case 7 => 40
+        }
+    }
+    nextNote: func(subphase:UInt) -> Event {
+        r:Int = Random randInt(0,999)
+        sum:Int = (probs[0] * 1000.0) round()
+        pitch:UInt = 0
+        while (sum < r && pitch < 11) {
+            pitch += 1
+            sum += (probs[pitch] * 1000.0) round()
+        }
+        if (anti && last == pitch && 10 < Random randInt(0,20)) {
+            pitch += Random randInt(0,11)
+        }
+        return Event new(0,pitch,velocity(subphase))
+    }
+    toggle: func { anti = !anti }
+}
+
 Player: class {
     first: Bool
+    loop: Bool
     spn: Double
     phase: Long
     last: UInt
     playing: Bool
     dynamic: Double
-    lastNote: UInt
     subphase: UInt
     v_w: ArrayList<Double>
     v_s: ArrayList<Double>
     loss: Double
-    drums:Instrument*
+    drums:Drums*
+    bass:Bass*
 
 
     init: func() {
@@ -96,9 +141,9 @@ Player: class {
         spn = 48000.0
         phase = 1
         dynamic = 0.0
-        lastNote = 0
         subphase = 0
         loss = 0
+        loop = false
         v_w = ArrayList<Double> new()
         v_s = ArrayList<Double> new()
         for (i in 0..12) {
@@ -106,6 +151,7 @@ Player: class {
             v_s.add(1.0 / 12.0)
         }
         drums = Drums new()
+        bass = Bass new(v_w)
     }
 
     updateTempo: func (delta: UInt) {
@@ -113,7 +159,7 @@ Player: class {
         first:Bool = true
         minLoss:Double = 0.0
         index:UInt = -1
-        for (i in 0..12) {
+        for (i in 0..9) {
             // printf("Power %d is %.4f\n", i, powers[i])
             pred := spn / POWERS[i]
             loss := (pred - delta as Double) * POWERS[i]
@@ -134,7 +180,7 @@ Player: class {
         spn = (spn / 480) round() * 480
         // spn = delta
         // printf (" -> %.4f\n", 1.0/ (spn / 48000) * 4 * 60)
-        dynamic = max(0.0, min(1.0, 0.125 + 0.75*(dynamic + 0.05 * ((index as Double) - 3))))
+        dynamic = max(0.0, min(1.0, 0.1 + 0.8*(dynamic + 0.05 * ((index as Double) - 2))))
     }
 
     updatePhase: func(delta: UInt) {
@@ -147,7 +193,7 @@ Player: class {
     }
 
     updateDynamic: func(velocity: UInt) {
-        dynamic = max(0.0, min(1.0, 0.125 + 0.75*(dynamic + 0.0025 * ((velocity as Double) - 64.0))))
+        dynamic = max(0.0, min(1.0, 0.1 + 0.8*(dynamic + 0.0025 * ((velocity as Double) - 64.0))))
         // "dynamics = #{dynamic}" println()
     }
 
@@ -170,7 +216,7 @@ Player: class {
         }
         for (i in 0..12) {
             v_w[i] = ((1.0 - ALPHA) * (v[i] / sum)) + (ALPHA * v_s[i])
-            v_s[i] = ((1.0 - ALPHA) * v_s[i]) + (ALPHA * (v[i] / sum))
+            //v_s[i] = ((1.0 - ALPHA) * v_s[i]) + (ALPHA * (v[i] / sum))
         }
     }
 
@@ -202,24 +248,24 @@ Player: class {
         fflush(stdout)
     }
 
-    play: func(buffer:Pointer, frames: UInt, instrument: Instrument*) {
+    play: func(drumsBuffer:Pointer, bassBuffer:Pointer, frames: UInt) {
         for (i in 0..frames) {
             // "phase = #{phase}" println()
             phase -= 1
             // "-> #{phase}" println()
             if (phase == 0) {
-                playNoteOff(i, buffer)
-                evt:Event = instrument play(subphase)
-                playNoteOn(i+1, buffer, evt note,evt velocity)
+                playNoteOff(i, drumsBuffer, drums@ last)
+                playNoteOff(i+1, bassBuffer, bass@ last)
+                evt:Event = drums play(subphase)
+                playNoteOn(i+2, drumsBuffer, evt note,evt velocity)
+                evt = bass play(subphase)
+                playNoteOn(i+3, bassBuffer, evt note,evt velocity)
+                if (loop) updateHarmony(evt note)
                 phase = spn roundLong() / 4
                 subphase += 1
                 if (subphase == 8) subphase = 0
             }
         }
-    }
-
-    playDrums: func(buffer:Pointer, frames: UInt) {
-        play(buffer, frames, drums)
     }
 
     playNoteOn: func(i:UInt, buffer:Pointer, pitch:UInt, velocity:UInt) {
@@ -230,15 +276,16 @@ Player: class {
         evt[2] = vel as UChar // velocity
         evt[1] = pitch as UChar // pitch
         evt[0] = 0x90 as UChar // note on
-        lastNote = pitch
     }
 
-    playNoteOff: func(i:UInt, buffer:Pointer) {
-        if (lastNote == 0) return
+    playNoteOff: func(i:UInt, buffer:Pointer, pitch:UInt) {
+        if (pitch == 0) return
         evt:UChar* = jack_midi_event_reserve(buffer, i, 3)
         // "NoteOff (i=#{i})" println()
         evt[2] = 64 as UChar // velocity
-        evt[1] = lastNote as UChar // pitch
+        evt[1] = pitch as UChar // pitch
         evt[0] = 0x80 as UChar // note off
     }
+    toggleAnti: func { bass toggle() }
+    toggleLoop: func { loop = !loop }
 }
